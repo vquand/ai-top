@@ -77,6 +77,10 @@ pub struct App {
     pub sidebar_scroll: u16,
     pub project_cursor: usize,
     collapsed: HashSet<String>,
+    expanded_history: HashSet<String>,
+    history_selected: bool,
+    pub history_hits: Vec<(String, Rect)>,
+    history_offsets: Vec<(String, u16)>,
     pub provider_hits: Vec<(Option<Kind>, Rect)>,
     pub project_hits: Vec<(String, Rect)>,
     pub sidebar_area: Rect,
@@ -100,6 +104,10 @@ impl Default for App {
             sidebar_scroll: 0,
             project_cursor: 0,
             collapsed: HashSet::new(),
+            expanded_history: HashSet::new(),
+            history_selected: false,
+            history_hits: vec![],
+            history_offsets: vec![],
             provider_hits: vec![],
             project_hits: vec![],
             sidebar_area: Rect::default(),
@@ -123,6 +131,7 @@ impl App {
         self.selected = k;
         self.scroll = 0;
         self.project_cursor = 0;
+        self.history_selected = false;
         self.reveal_provider = true;
     }
     pub fn move_selection(&mut self, delta: i32) {
@@ -142,14 +151,31 @@ impl App {
             }
             Focus::Projects => {
                 let groups = projects(&self.agents, self.selected);
-                if !groups.is_empty() {
-                    self.project_cursor = (self.project_cursor as i32 + delta)
-                        .clamp(0, groups.len() as i32 - 1)
-                        as usize;
+                let targets: Vec<_> = groups
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(index, p)| {
+                        let mut targets = vec![(index, false)];
+                        if p.hidden_finished() > 0 && !self.collapsed.contains(&p.path) {
+                            targets.push((index, true));
+                        }
+                        targets
+                    })
+                    .collect();
+                if !targets.is_empty() {
+                    let current = targets
+                        .iter()
+                        .position(|t| *t == (self.project_cursor, self.history_selected))
+                        .unwrap_or(0);
+                    let next = (current as i32 + delta).clamp(0, targets.len() as i32 - 1) as usize;
+                    (self.project_cursor, self.history_selected) = targets[next];
                     let target = &groups[self.project_cursor].path;
-                    if let Some((_, offset)) =
-                        self.project_offsets.iter().find(|(p, _)| p == target)
-                    {
+                    let offsets = if self.history_selected {
+                        &self.history_offsets
+                    } else {
+                        &self.project_offsets
+                    };
+                    if let Some((_, offset)) = offsets.iter().find(|(p, _)| p == target) {
                         if *offset < self.scroll {
                             self.scroll = *offset;
                         } else if *offset >= self.scroll.saturating_add(self.tree_area.height) {
@@ -162,12 +188,17 @@ impl App {
     }
     pub fn toggle_project(&mut self) {
         let groups = projects(&self.agents, self.selected);
-        if let Some(p) = groups.get(self.project_cursor)
-            && !self.collapsed.remove(&p.path)
-        {
-            self.collapsed.insert(p.path.clone());
+        if let Some(p) = groups.get(self.project_cursor) {
+            if self.history_selected && p.hidden_finished() > 0 {
+                if !self.expanded_history.remove(&p.path) {
+                    self.expanded_history.insert(p.path.clone());
+                }
+            } else if !self.collapsed.remove(&p.path) {
+                self.collapsed.insert(p.path.clone());
+            }
         }
     }
+
     pub fn page(&mut self, down: bool) {
         let (scroll, amount) = match self.focus {
             Focus::Providers => (
@@ -198,12 +229,34 @@ impl App {
             return;
         }
         if let Some((path, _)) = self
+            .history_hits
+            .iter()
+            .find(|(_, r)| r.contains((x, y).into()))
+        {
+            let path = path.clone();
+            self.focus = Focus::Projects;
+            self.project_cursor = projects(&self.agents, self.selected)
+                .iter()
+                .position(|p| p.path == path)
+                .unwrap_or(0);
+            self.history_selected = true;
+            if !self.expanded_history.remove(&path) {
+                self.expanded_history.insert(path);
+            }
+            return;
+        }
+        if let Some((path, _)) = self
             .project_hits
             .iter()
             .find(|(_, r)| r.contains((x, y).into()))
         {
             let path = path.clone();
             self.focus = Focus::Projects;
+            self.history_selected = false;
+            self.project_cursor = projects(&self.agents, self.selected)
+                .iter()
+                .position(|p| p.path == path)
+                .unwrap_or(0);
             if !self.collapsed.remove(&path) {
                 self.collapsed.insert(path);
             }
@@ -270,7 +323,7 @@ impl App {
                 area.height * 2 / 3,
             );
             f.render_widget(Clear, r);
-            f.render_widget(Paragraph::new("A or Esc: all providers. 1/2/3: provider.\nTab / Left / Right: switch panel focus.\nUp / Down or J / K: provider / project selection.\nEnter / Space: clear provider filter / collapse project.\nPageUp / PageDown: scroll focused panel. Home / End: top / bottom.\nMouse: provider filter or project collapse; wheel: scroll.\nU: quota used / remaining. R: refresh quotas. Q / Ctrl-C: quit.\n\nRunning agents first among siblings; hierarchy stays intact.\nFinished and paused sessions remain in active projects.\nProvider badges: ✳ Claude  ◎ Codex  ◆ Antigravity.\nNo prompts or conversation bodies are displayed.\n\nPress ? or Esc to close help.").block(Block::bordered().title(" ai-top help ").border_style(Style::default().fg(MUTED))).style(Style::default().fg(TEXT).bg(BG)),r);
+            f.render_widget(Paragraph::new("A or Esc: all providers. 1/2/3: provider.\nTab / Left / Right: switch panel focus.\nUp / Down or J / K: provider / project selection.\nEnter / Space: clear provider filter / collapse project.\nPageUp / PageDown: scroll focused panel. Home / End: top / bottom.\nMouse: provider filter or project collapse; wheel: scroll.\nU: quota used / remaining. R: refresh quotas. Q / Ctrl-C: quit.\n\nRunning agents first among siblings; hierarchy stays intact.\nFive newest finished sub-agents per project; select … and Enter to show more.\nFinished and paused sessions remain in active projects.\nProvider badges: ✳ Claude  ◎ Codex  ◆ Antigravity.\nNo prompts or conversation bodies are displayed.\n\nPress ? or Esc to close help.").block(Block::bordered().title(" ai-top help ").border_style(Style::default().fg(MUTED))).style(Style::default().fg(TEXT).bg(BG)),r);
         }
     }
     fn sidebar(&mut self, f: &mut Frame, area: Rect, now: i64) {
@@ -449,6 +502,7 @@ impl App {
             Line::default(),
         ];
         let mut ranges = vec![];
+        let mut history_ranges = vec![];
         if groups.is_empty() {
             lines.push(Line::from(text(
                 " No projects with verified running agents.",
@@ -470,7 +524,10 @@ impl App {
                 text(
                     format!(
                         " {} {} {}",
-                        if self.focus == Focus::Projects && index == self.project_cursor {
+                        if self.focus == Focus::Projects
+                            && index == self.project_cursor
+                            && !self.history_selected
+                        {
                             "▶"
                         } else {
                             " "
@@ -488,7 +545,8 @@ impl App {
                 MUTED,
             )));
             if !closed {
-                for row in &project.rows {
+                let expanded = self.expanded_history.contains(&project.path);
+                for row in project.visible_rows(expanded) {
                     let a = row.agent;
                     let indent = "│  ".repeat(row.depth.min(8));
                     let branch = if row.depth > 0 { "├─ " } else { "" };
@@ -524,6 +582,28 @@ impl App {
                         )));
                     }
                 }
+                if project.hidden_finished() > 0 {
+                    let start = lines.len();
+                    let label = if expanded {
+                        "Show fewer finished sub-agents".to_string()
+                    } else {
+                        format!("… {} more finished sub-agents", project.hidden_finished())
+                    };
+                    let selected = self.focus == Focus::Projects
+                        && index == self.project_cursor
+                        && self.history_selected;
+                    lines.push(Line::from(text(
+                        clip(
+                            &format!(
+                                " {} {label} (Enter / click)",
+                                if selected { "▶" } else { " " }
+                            ),
+                            w,
+                        ),
+                        if selected { TEXT } else { MUTED },
+                    )));
+                    history_ranges.push((project.path.clone(), start, start + 1));
+                }
             }
             lines.push(Line::default());
         }
@@ -532,6 +612,14 @@ impl App {
         self.project_offsets = ranges
             .iter()
             .map(|(p, start, _)| (p.clone(), (*start).min(u16::MAX as usize) as u16))
+            .collect();
+        self.history_offsets = history_ranges
+            .iter()
+            .map(|(p, start, _)| (p.clone(), (*start).min(u16::MAX as usize) as u16))
+            .collect();
+        self.history_hits = history_ranges
+            .into_iter()
+            .filter_map(|(p, start, end)| hit(inner, self.scroll, start, end).map(|r| (p, r)))
             .collect();
         self.project_hits = ranges
             .into_iter()

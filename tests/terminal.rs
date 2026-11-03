@@ -152,3 +152,51 @@ fn moving_to_a_project_beyond_a_large_tree_keeps_its_heading_visible() {
             .any(|(kind, _)| *kind == Some(Kind::Antigravity))
     );
 }
+
+#[test]
+fn finished_subagents_expand_only_when_the_more_row_is_selected() {
+    let mut a = app();
+    let template = a.agents[1].clone();
+    a.agents.truncate(1);
+    for n in 0..9 {
+        let mut child = template.clone();
+        child.id = format!("done-{n}");
+        child.name = format!("completed-{n}");
+        child.ended_at = Some(300 + n);
+        child.updated_at = 900 - n; // Completion time, rather than scan time, decides recency.
+        a.agents.push(child);
+    }
+    let mut active = template;
+    active.id = "active".into();
+    active.name = "active-child".into();
+    active.status = Status::Running;
+    a.agents.push(active);
+    let initial = screen(&mut a, 180, 50).join("\n");
+    assert_eq!(initial.matches("completed-").count(), 5);
+    assert!(!initial.contains("completed-0"));
+    assert!(initial.contains("completed-8"));
+    assert!(initial.contains("active-child"));
+    assert!(initial.contains("… 4 more finished sub-agents"));
+    a.focus = ai_top::ui::Focus::Projects;
+    a.move_selection(1); // Select the ellipsis, without expanding it.
+    assert_eq!(
+        screen(&mut a, 180, 50)
+            .join("\n")
+            .matches("completed-")
+            .count(),
+        5
+    );
+    a.toggle_project(); // Enter on the selected ellipsis expands it.
+    let expanded = screen(&mut a, 180, 50).join("\n");
+    assert_eq!(expanded.matches("completed-").count(), 9);
+    assert!(expanded.contains("Show fewer finished sub-agents"));
+    let (_, rect) = a.history_hits[0].clone();
+    a.click(rect.x, rect.y); // Explicit mouse selection collapses again.
+    assert_eq!(
+        screen(&mut a, 180, 50)
+            .join("\n")
+            .matches("completed-")
+            .count(),
+        5
+    );
+}

@@ -36,7 +36,7 @@ impl QuotaState {
         match result {
             Ok(p) => {
                 self.error = None;
-                self.updated_at = Some(now);
+                self.updated_at = Some(p.fetched_at.unwrap_or(now));
                 self.plan = p.plan;
                 self.extras = p.extras;
                 self.windows = if p.pools.is_empty() {
@@ -104,6 +104,19 @@ impl QuotaState {
 mod tests {
     use super::*;
     use crate::data::{Provider, Window};
+    #[test]
+    fn cached_quota_keeps_the_original_network_fetch_age() {
+        let mut q = QuotaState::new(Kind::Claude);
+        q.update(
+            Ok(Provider {
+                fetched_at: Some(100),
+                ..Default::default()
+            }),
+            500,
+        );
+        assert_eq!(q.updated_at, Some(100));
+    }
+
     #[test]
     fn failed_refresh_retains_last_quota_with_error_and_original_age() {
         let mut q = QuotaState::new(Kind::Codex);

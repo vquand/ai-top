@@ -35,7 +35,9 @@ mean every account tier or future provider format has been verified.
   providers. Running agents sort first among siblings while parents remain above
   their children.
 - **Useful history:** retain paused and finished agents in projects with running
-  work. Completed agents show their work duration and finish time. Failure,
+  work. Each project initially shows its five most recently finished sub-agents;
+  older ones remain behind a selectable `… N more` row until explicitly expanded.
+  Completed agents show their work duration and finish time. Failure,
   cancellation, unconfirmed exit, and unknown status have distinct labels.
 - **Adaptive density:** one-line rows in wide terminals; name and short work
   summary on separate lines when space is narrower.
@@ -99,8 +101,9 @@ an error rather than sample values.
 | Click provider | Filter; click the selected provider again to clear |
 | `Tab`, `Left`, `Right` | Switch panel focus |
 | `Up` / `Down`, `K` / `J` | Select provider or project |
-| `Enter` / `Space` | Collapse project or clear selected provider filter |
+| `Enter` / `Space` | Collapse project, expand the selected history row, or clear provider filter |
 | Click project heading | Collapse / expand that tree |
+| Select `… N more` + Enter, or click it | Reveal older finished sub-agents; `Show fewer` collapses them |
 | `PageUp` / `PageDown`, `Home` / `End` | Scroll focused panel |
 | Mouse wheel | Scroll panel under pointer |
 | `U` | Toggle quota used / remaining |
@@ -119,7 +122,7 @@ Optional settings live in `~/.config/ai-top/config.toml`, or the corresponding
 
 ```toml
 display = "used"          # "used" or "remaining"
-refresh_secs = 120        # quota polling; minimum 15 seconds
+refresh_secs = 120        # other provider polling; Claude has a 10-minute minimum
 antigravity_jio = false   # true for the Jio-bundled Google AI Pro entitlement
 ```
 
@@ -190,3 +193,21 @@ runtime and automated tests are Rust-only.
 ## License
 
 [MIT](LICENSE)
+
+### Claude usage request pacing
+
+AI Quota Bar and ai-top share `$XDG_CACHE_HOME/ai-quota-bar/claude-usage.json`
+(default `~/.cache/ai-quota-bar/claude-usage.json`) and a process lock. Together
+these tools make at most one scheduled Claude usage fetch per ten minutes;
+manual refresh and restarts respect the same cache. Other providers retain their
+configured refresh interval. The cache contains quota data and errors, never tokens.
+
+Anthropic does not publish a polling limit for the OAuth `/api/oauth/usage`
+endpoint. Ten minutes is a conservative fallback, twice the five-minute Claude
+Code cadence [reported in its tracker](https://github.com/anthropics/claude-code/issues/93107),
+not a verified server limit. On HTTP 429, requests pause for at least 20 minutes,
+then 40 and 60 minutes for repeated failures. A valid `Retry-After` extends that
+pause to at least twice the requested delay. A successful request resets backoff.
+Other clients, including Claude Code sessions, can still consume the account's
+shared endpoint allowance. The public Admin Usage and Cost API's once-per-minute
+polling guidance applies to a different endpoint.

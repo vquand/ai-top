@@ -133,7 +133,7 @@ pub fn clean(value: &str) -> String {
         .take(180)
         .collect()
 }
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct TreeRow<'a> {
     pub agent: &'a Agent,
     pub depth: usize,
@@ -142,6 +142,54 @@ pub struct TreeRow<'a> {
 pub struct Project<'a> {
     pub path: String,
     pub rows: Vec<TreeRow<'a>>,
+}
+impl Project<'_> {
+    pub fn hidden_finished(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|r| r.agent.parent.is_some() && r.agent.status == Status::Finished)
+            .count()
+            .saturating_sub(5)
+    }
+
+    pub fn visible_rows(&self, expanded: bool) -> Vec<TreeRow<'_>> {
+        if expanded || self.hidden_finished() == 0 {
+            return self.rows.clone();
+        }
+        let mut finished: Vec<_> = self
+            .rows
+            .iter()
+            .filter(|r| r.agent.parent.is_some() && r.agent.status == Status::Finished)
+            .collect();
+        finished.sort_by_key(|r| {
+            (
+                std::cmp::Reverse(r.agent.ended_at.unwrap_or(r.agent.updated_at)),
+                r.agent.kind,
+                r.agent.id.as_str(),
+            )
+        });
+        let hidden: HashSet<_> = finished
+            .into_iter()
+            .skip(5)
+            .map(|r| (r.agent.kind, r.agent.id.as_str()))
+            .collect();
+        // Keep descendants of hidden parents visible at the nearest visible ancestor.
+        let mut depths = vec![0];
+        let mut rows = vec![];
+        for row in &self.rows {
+            depths.resize(row.depth + 2, 0);
+            let depth = depths[row.depth];
+            let visible = !hidden.contains(&(row.agent.kind, row.agent.id.as_str()));
+            depths[row.depth + 1] = depth + usize::from(visible);
+            if visible {
+                rows.push(TreeRow {
+                    agent: row.agent,
+                    depth,
+                });
+            }
+        }
+        rows
+    }
 }
 pub fn projects(agents: &[Agent], filter: Option<Kind>) -> Vec<Project<'_>> {
     let active: HashSet<_> = agents
